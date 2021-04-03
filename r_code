@@ -1,0 +1,124 @@
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(tidyverse)
+library(reshape2)
+library(openxlsx)
+library(janitor)
+library(plyr)
+library(lubridate)
+
+
+policies <- read.xlsx("/Users/cristinahain/Desktop/thesis/
+COVID-19-US-State-Policy-Database-master/6_29_2020.xlsx",
+detectDates = TRUE)
+
+jhu <- read.csv("~/Desktop/thesis/jhu/COVID-19/csse_covid_19_data/
+csse_covid_19_time_series/time_series_covid19_confirmed_US.csv")
+
+states <- jhu %>% select(Province_State, X1.22.20:X8.19.20) 
+%>% ddply("Province_State",numcolwise(sum))
+
+mask_policy <- function(policy, med, state) {
+  df <- med[med$State == state, ]
+  state_pol <- policy %>% filter(STATE == state)
+
+  df$State <- NULL
+  names <- as.Date(names(df), format = "%Y-%m-%d")
+  data <- as_tibble(names) %>% add_column(t(df))
+  data <- dplyr::rename(data, Date = value)
+  data <- dplyr::rename(data, Covid_Count = "t(df)")
+  
+  ST <- data.frame(date = c(state_pol$STAYHOME,
+  state_pol$END_STHM,
+  state_pol$STEMERG,
+  state_pol$FM_ALL),
+  Policies = c("Stay at home", "End stay at home", "Declared State of 
+  Emergency",
+  "Mandate face mask use by everyone in public spaces"), stringsAsFactors = 
+  FALSE)
+  
+  ggplot(aes(x=Date,y=Covid_Count),data=data) + 
+    scale_x_date(date_breaks = "2 weeks", date_labels="%b %d") + 
+    scale_y_discrete("Covid Total Case Count") + 
+    geom_line() +
+    geom_vline(mapping = aes(xintercept = as.Date(date), colour = Policies),
+               data = ST,
+               show.legend = TRUE) + 
+    ggtitle(paste(state, " COVID-19 Cases"))}
+mask_policy(policies, states, "New York")
+mask_policy(policies, states, "Massachusetts")
+mask_policy(policies, states, "New Jersey")
+mask_policy(policies, states, "Florida")
+mask_policy(policies, states, "California")
+
+tweets <- read.csv("/Users/cristinahain/Desktop/thesis/beginning_pa.csv")
+
+test_tweets <- tweets %>% select(text_cleaned, user_location)
+#test_tweets <- text['text_cleaned']
+test_tweets <- mutate(test_tweets, text = 
+as.character(test_tweets$text_cleaned))
+
+separate <- test_tweets %>% ungroup() %>% unnest_tokens(word, text)
+
+
+bing_and_nrc <- bind_rows(
+  separate %>% 
+    inner_join(get_sentiments("bing")) %>%
+    mutate(method = "Bing et al."),
+  separate %>% 
+    inner_join(get_sentiments("nrc") %>% 
+                 filter(sentiment %in% c("positive", 
+                                         "negative"))) 
+   %>%
+    mutate(method = "NRC")) %>%
+  count(method, index = user_location, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+
+
+bing_and_nrc_philly <- bing_and_nrc[str_detect(bing_and_nrc$index, 'Philadelphia|Philly'),] 
+bing_and_nrc_pitt <- bing_and_nrc[str_detect(bing_and_nrc$index, 'Pittsburgh'),]
+
+bing <- bing_and_nrc_philly %>% filter(method=='Bing et al.') 
+nrc <- bing_and_nrc_philly %>% filter(method=='NRC')
+pitt_bing <- bing_and_nrc_pitt %>% filter(method=='Bing et al.')
+pitt_nrc <- bing_and_nrc_pitt %>% filter(method=='NRC')
+
+bing_and_nrc_other <- bing_and_nrc[!str_detect(bing_and_nrc$index, 
+'Philadelphia|Philly|Pittsburgh|USA|Mexico|GA|Washington'),] 
+bing_and_nrc_other <- bing_and_nrc_other[str_detect(bing_and_nrc_other$index, 
+','),]
+bing_and_nrc_other <- bing_and_nrc_other[str_detect(bing_and_nrc_other$index, 
+','),]
+
+df <- data.frame("method"= character(0), "index" = character(0), "negative" = 
+numeric(0), "positive" = numeric(0), "sentiment" = numeric(0) , 
+stringsAsFactors = FALSE)
+
+
+data <- c("Bing et al.", "Philadelphia, PA", 
+as.numeric(round(mean(bing$negative))), as.numeric(round(mean(bing$positive))), 
+as.numeric(round(mean(bing$sentiment))))
+data1 <- c("NRC", "Philadelphia, PA", as.numeric(round(mean(nrc$negative))), 
+as.numeric(round(mean(nrc$positive))), as.numeric(round(mean(nrc$sentiment))))
+
+data2 <- c("Bing et al.", "Pittsburgh, PA", 
+as.numeric(round(mean(pitt_bing$negative))), 
+as.numeric(round(mean(pitt_bing$positive))), 
+as.numeric(round(mean(pitt_bing$sentiment))))
+data3 <- c("NRC", "Pittsburgh, PA", as.numeric(round(mean(pitt_nrc$negative))), as.numeric(round(mean(pitt_nrc$positive))), 
+as.numeric(round(mean(pitt_nrc$sentiment))))
+data <- rbind(rbind(rbind(data, data1), data2), data3)
+df <-rbind(df, data)
+df <- rbind(df, bing_and_nrc_other)
+x <- c("method", "index", "negative","positive", "sentiment")
+colnames(data) <- x
+df$negative <- as.double(df$negative)
+df$positive <- as.double(df$positive)
+df$sentiment <- as.double(df$sentiment)
+text[str_detect(text$user_location,locs),]
+ggplot(df, aes(index, sentiment, fill=method)) + 
+  geom_bar(stat = "identity", position = 'dodge') + coord_flip()
+
+geom_smooth()
