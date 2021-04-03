@@ -1,0 +1,250 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+import seaborn as sns
+sns.set(rc={'figure.figsize':(22, 6)})
+import re
+import os
+import time
+from datetime import datetime, date, timedelta
+
+# For Twitter API extraction
+import tweepy
+
+# Tweet pre-processor
+import preprocessor as p
+
+# NLTK
+import nltk
+nltk.download('vader_lexicon')
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+# TextBlob
+from textblob import TextBlob
+
+# FLairNLP
+from flair.models import TextClassifier
+from flair.data import Sentence
+
+# Stanza
+import stanza
+stanza.download('en')
+
+# Stanford CoreNLP
+from pycorenlp import StanfordCoreNLP
+
+#Scipy for T-Test
+import scipy
+from scipy import stats
+
+# election!!
+tweets_df = pd.read_csv('/Users/cristinahain/Desktop/thesis/COVID-19-TweetIDs/electionTweets/tmp/long-election-week.csv', header=0, delimiter =',', sep = '/n', error_bad_lines=False)
+
+# jan 20 2021
+
+tweets_df = pd.read_csv('/Users/cristinahain/Desktop/thesis/COVID-19-TweetIDs/inaugTweets/tmp/long-inaug.csv', header=0, delimiter =',', sep = '/n', error_bad_lines=False)
+
+
+df = tweets_df[["created_at", "text", "user_location"]].dropna()
+searchfor =  ['Pennsylvania', 'Philadelphia', 'Pittsburgh'] 
+#['New York', 'NY', 'Westchester']  
+df_edit = df[df.user_location.str.contains('|'.join(searchfor))]
+tweets_df = df_edit.copy()
+
+# Clean tweet text with tweet-preprocessor
+import re
+def clean(tweet):
+    
+    return(' '.join(re.sub("(@[A-Za-z0-9]+)|([^0-9A-Za-z \t])|(\w+:\/\/\S+)"," ",tweet).split()))
+tweets_df['text_cleaned'] = tweets_df['text'].apply(lambda x: clean(x))
+
+# Remove duplicate tweets
+tweets_df.drop_duplicates(subset='text_cleaned', keep="first", inplace = True)
+len(tweets_df)
+
+# Remove unnecessary characters
+punct =['%','/',':','\\','&amp;','&',';']
+
+def remove_punctuations(text):
+    for punctuation in punct:
+        text = text.replace(punctuation, '')
+    return text
+
+tweets_df['text_cleaned'] = tweets_df['text_cleaned'].apply(lambda x: remove_punctuations(x))
+
+tweets_df['text_cleaned'].replace('', np.nan, inplace=True)
+tweets_df['text_cleaned'].replace(' ', np.nan, inplace=True)
+tweets_df.dropna(subset=['text_cleaned'], inplace=True)
+len(tweets_df)
+tweets_df = tweets_df.reset_index(drop=True)
+
+dates = []
+for index,row in tweets_df.iterrows():
+    try:
+        ts = time.strftime('%Y-%m-%d %H:%M:%S', 
+        time.strptime(row['created_at'],'%a %b %d %H:%M:%S +0000 %Y'))
+        #tweets_df.replace(row['created_at'], ts)
+        dates.append(ts)
+        type(ts)
+    except ValueError:        
+        tweets_df = tweets_df.drop([index])
+
+tweets_df['date'] = dates
+
+# # Sentiment Analysis 
+# ## Bag of Words
+# Define function to get value counts
+def get_value_counts(col_name, analyzer_name):
+    count = pd.DataFrame(tweets_df[col_name].value_counts())
+    percentage = pd.DataFrame(tweets_df[col_name].value_counts(normalize=True).mul(100))
+    value_counts_df = pd.concat([count, percentage], axis = 1)
+    value_counts_df = value_counts_df.reset_index()
+    value_counts_df.columns = ['sentiment', 'counts', 'percentage']
+    value_counts_df.sort_values('sentiment', inplace = True)
+    value_counts_df['percentage'] = value_counts_df['percentage'].apply(lambda 
+    x: round(x,2))
+    value_counts_df = value_counts_df.reset_index(drop = True)
+    value_counts_df['analyzer'] = analyzer_name
+    return value_counts_df
+
+sia = SentimentIntensityAnalyzer()
+
+# Obtaining NLTK scores
+tweets_df['nltk_scores'] = tweets_df['text_cleaned'].apply(lambda x: sia.polarity_scores(x))
+
+# Obtaining NLTK compound score
+tweets_df['nltk_cmp_score'] = tweets_df['nltk_scores'].apply(lambda score_dict: score_dict['compound'])
+
+neutral_thresh = 0.05
+
+# Categorize scores into the sentiments of positive, neutral or negative
+tweets_df['nltk_sentiment'] = tweets_df['nltk_cmp_score'].apply(lambda c: 
+'Positive' if c >= neutral_thresh else ('Negative' if c <= -(neutral_thresh) 
+else 'Neutral'))
+tweets_df['nltk_cmp_score'].describe()
+
+nltk_sentiment_df = get_value_counts('nltk_sentiment','NLTK Vader')
+
+sns.set_theme(style="dark")
+ax = sns.barplot(x="sentiment", y="percentage", data=nltk_sentiment_df)
+ax.set_title('NLTK Vader')
+
+for index, row in nltk_sentiment_df.iterrows():
+    ax.text(row.name,row.percentage, round(row.percentage,1), color='black', 
+    ha="center")
+fig = ax.get_figure()   
+# ## CNN Stanza
+nlp = stanza.Pipeline(lang='en', processors='tokenize,sentiment')
+
+def stanza_analyze(Text):
+    document = nlp(Text)
+    print('Processing')
+    return np.mean([(i.sentiment - 1) for i in document.sentences]) # Minus 1 
+    so as to bring score range of [0,2] to [-1,1]
+
+tweets_df['stanza_score'] = tweets_df['text_cleaned'].apply(lambda x: 
+stanza_analyze(x))
+neutral_thresh = 0.05
+# Convert average Stanza sentiment score into sentiment categories
+tweets_df['stanza_sentiment'] = tweets_df['stanza_score'].apply(lambda c: 
+'Positive' if c >= neutral_thresh else ('Negative' if c <= -(neutral_thresh) 
+else 'Neutral'))
+
+stanza_sentiment_df = get_value_counts('stanza_sentiment','Stanza')
+
+sns.set_theme(style="dark")
+ax = sns.barplot(x="sentiment", y="percentage", data=stanza_sentiment_df)
+ax.set_title('Stanza')
+
+for index, row in stanza_sentiment_df.iterrows():
+    ax.text(row.name,row.percentage, round(row.percentage,1), color='black', ha="center")
+    
+fig = ax.get_figure()
+
+# # Graphs
+#localized_avgs(tweets_df)
+tweets_df['timedate'] = pd.to_datetime(tweets_df['date'])
+tweets_df['timedate']
+
+#datetime_object = datetime.strptime(date, '%b %d %Y %I:%M%p')
+hourly = pd.DataFrame(tweets_df.groupby([pd.Grouper(key='timedate', freq='H')]).nltk_cmp_score.mean())
+daily = pd.DataFrame(tweets_df.groupby([pd.Grouper(key='timedate', freq='D')]).nltk_cmp_score.mean())
+
+hourly_st = pd.DataFrame(tweets_df.groupby([pd.Grouper(key='timedate', freq='H')]).stanza_score.mean())
+daily_st = pd.DataFrame(tweets_df.groupby([pd.Grouper(key='timedate', freq='D')]).stanza_score.mean())
+
+## Graph
+# set figure size
+name = '/Users/cristinahain/Desktop/thesis/graphs/beginning.png'
+plt.figure( figsize = ( 22, 6))
+
+# plot a simple time series plot
+
+sns.lineplot( x = 'timedate',
+             y = 'nltk_cmp_score',
+             data = hourly,
+             label = 'Hourly Average')
+  
+sns.lineplot( x = 'timedate',
+             y = 'nltk_cmp_score',
+             data = daily,
+             label = 'Daily Average')
+
+plt.xlabel( 'Days')
+plt.ylabel('Average Sentiment')
+plt.title('Average NLTK Sentiment around 3/15/2020')
+plt.savefig(name)
+
+## Stanza
+name = '/Users/cristinahain/Desktop/thesis/graphs/beginning_cnn.png'
+hourly_st = pd.DataFrame(tweets_df.groupby([pd.Grouper(key='timedate', freq='H')]).stanza_score.mean())
+daily_st = pd.DataFrame(tweets_df.groupby([pd.Grouper(key='timedate', freq='D')]).stanza_score.mean())
+
+# set figure size
+plt.figure( figsize = ( 22, 6))
+  
+# plot a simple time series plot
+# using seaborn.lineplot()
+sns.lineplot( x = 'timedate',
+             y = 'stanza_score',
+             data = hourly_st,
+             label = 'Hourly Average')
+  
+sns.lineplot( x = 'timedate',
+             y = 'stanza_score',
+             data = daily_st,
+             label = 'Daily Average')
+
+plt.xlabel( 'Days')
+plt.ylabel('Average Sentiment')
+plt.title('Average CNN Sentiment around 3/15/2020')
+plt.savefig(name)
+
+# # T-Test 
+# Get BEFORE dates
+regex = "2021-01-1[1-9]"
+dates = tweets_df['date']
+date_of_interest = dates.str.contains(regex)
+vals = tweets_df[date_of_interest]
+before = np.mean(vals['nltk_cmp_score'])
+n1 = len(vals)
+n1
+a = vals['nltk_cmp_score']
+a1 = vals['stanza_score']
+
+# Get AFTER dates
+regex = "2021-01-2[1-9]"
+dates = tweets_df['date']
+date_of_interest = dates.str.contains(regex)
+vals = tweets_df[date_of_interest]
+after = np.mean(vals['nltk_cmp_score'])
+b = vals['nltk_cmp_score']
+b1 = vals['stanza_score']
+n2 = len(vals['nltk_cmp_score'])
+
+# NLTK comparison
+stats.ttest_ind(a=a, b=b, equal_var= True, alternative='less')
+
+# CNN Comparison
+stats.ttest_ind(a1, b1, alternative='less')
